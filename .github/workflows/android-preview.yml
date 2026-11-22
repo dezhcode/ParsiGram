@@ -1,0 +1,93 @@
+name: Build Parsigram APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/android-preview.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: parsigram-android-preview
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v13.2.2-parsigram.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check release and install Android tools
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'Release already exists. No asset was replaced.'
+            echo 'RELEASE_EXISTS=true' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;35.0.0' 'build-tools;36.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
+      - name: Build the arm64 standalone APK
+        if: env.RELEASE_EXISTS != 'true'
+        run: |
+          cat > "$RUNNER_TEMP/arm64.init.gradle" <<'GRADLE'
+          gradle.beforeProject { project ->
+              if (project.path == ':TMessagesProj_AppStandalone') {
+                  project.pluginManager.withPlugin('com.android.application') {
+                      project.extensions.getByName('androidComponents').finalizeDsl { android ->
+                          def afat = android.productFlavors.getByName('afat')
+                          afat.ndk.abiFilters.clear()
+                          afat.ndk.abiFilters.add('arm64-v8a')
+                          android.packaging.jniLibs.excludes.addAll([
+                              '**/armeabi-v7a/*.so', '**/x86/*.so', '**/x86_64/*.so'
+                          ])
+                      }
+                  }
+              }
+          }
+          GRADLE
+          ./gradlew -I "$RUNNER_TEMP/arm64.init.gradle" --no-daemon --max-workers=4 \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8" \
+            -Pkotlin.compiler.execution.strategy=in-process -Pandroid.injected.build.abi=arm64-v8a \
+            :TMessagesProj_AppStandalone:assembleAfatStandalone
+      - name: Sign and verify the preview APK
+        if: env.RELEASE_EXISTS != 'true'
+        run: |
+          umask 077
+          openssl rand -hex 32 > "$RUNNER_TEMP/parsigram-preview.pass"
+          keytool -genkeypair -storetype PKCS12 -keystore "$RUNNER_TEMP/parsigram-preview.p12" \
+            -storepass:file "$RUNNER_TEMP/parsigram-preview.pass" -alias parsigram-preview \
+            -keyalg RSA -keysize 4096 -validity 10000 -dname 'CN=Parsigram Preview'
+          build_tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk=Parsigram-13.2.2-arm64-v8a.apk
+          input=$(find TMessagesProj_AppStandalone/build/intermediates/apk/afat/standalone -name '*.apk' -type f)
+          test -f "$input"
+          "$build_tools/apksigner" sign --ks "$RUNNER_TEMP/parsigram-preview.p12" \
+            --ks-pass "file:$RUNNER_TEMP/parsigram-preview.pass" --ks-key-alias parsigram-preview --out "$apk" "$input"
+          "$build_tools/apksigner" verify "$apk"
+          "$build_tools/zipalign" -c -P 16 4 "$apk"
+          "$build_tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/parsigram-badging.txt"
+          grep -F "package: name='Parsigram.dezhcode.app'" "$RUNNER_TEMP/parsigram-badging.txt"
+          grep -Fx "native-code: 'arm64-v8a'" "$RUNNER_TEMP/parsigram-badging.txt"
+          unzip -tq "$apk"
+      - name: Publish the verified APK
+        if: env.RELEASE_EXISTS != 'true'
+        run: |
+          apk=Parsigram-13.2.2-arm64-v8a.apk
+          digest=$(sha256sum "$apk" | cut -d ' ' -f 1)
+          printf '%s\n\n%s\n\n%s\n' \
+            'نسخهٔ آزمایشی پارسی‌گرام 13.2.2 برای دستگاه‌های اندرویدی arm64-v8a.' \
+            'شناسهٔ بسته `Parsigram.dezhcode.app` است. ورود به حساب تلگرام روی دستگاه تست نشده است.' \
+            "SHA-256: \`$digest\`" > "$RUNNER_TEMP/parsigram-release-notes.md"
+          gh release create "$RELEASE_TAG" "$apk" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title 'Parsigram 13.2.2 · نسخهٔ آزمایشی' --prerelease --notes-file "$RUNNER_TEMP/parsigram-release-notes.md"
