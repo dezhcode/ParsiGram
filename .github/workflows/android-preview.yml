@@ -36,7 +36,19 @@ jobs:
             echo 'RELEASE_EXISTS=true' >> "$GITHUB_ENV"
             exit 0
           fi
-          sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;35.0.0' 'build-tools;36.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
+          sdk="$RUNNER_TEMP/parsigram-android-sdk"
+          archive="$RUNNER_TEMP/parsigram-commandline-tools.zip"
+          mkdir -p "$sdk/cmdline-tools"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip -o "$archive"
+          unzip -q "$archive" -d "$sdk/cmdline-tools"
+          mv "$sdk/cmdline-tools/cmdline-tools" "$sdk/cmdline-tools/latest"
+          export ANDROID_HOME="$sdk" ANDROID_SDK_ROOT="$sdk"
+          printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\n' "$sdk" "$sdk" >> "$GITHUB_ENV"
+          sdkmanager="$sdk/cmdline-tools/latest/bin/sdkmanager"
+          (set +o pipefail; yes | "$sdkmanager" --sdk_root="$sdk" --licenses >/dev/null)
+          "$sdkmanager" --sdk_root="$sdk" 'platform-tools' 'platforms;android-36' \
+            'build-tools;35.0.0' 'build-tools;36.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
       - name: Build the arm64 standalone APK
         if: env.RELEASE_EXISTS != 'true'
         run: |
