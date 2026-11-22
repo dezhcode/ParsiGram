@@ -145,6 +145,10 @@ android {
     }
 
     defaultConfig {
+        resValue "string", "parsigram_application_id", APP_PACKAGE
+        resValue "string", "parsigram_contact_profile_mime", "vnd.android.cursor.item/vnd." + APP_PACKAGE.toLowerCase(Locale.ROOT) + ".android.profile"
+        resValue "string", "parsigram_contact_call_mime", "vnd.android.cursor.item/vnd." + APP_PACKAGE.toLowerCase(Locale.ROOT) + ".android.call"
+        resValue "string", "parsigram_contact_video_call_mime", "vnd.android.cursor.item/vnd." + APP_PACKAGE.toLowerCase(Locale.ROOT) + ".android.call.video"
         minSdkVersion 23
         targetSdkVersion 36
 

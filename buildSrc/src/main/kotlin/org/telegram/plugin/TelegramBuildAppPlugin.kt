@@ -3,6 +3,7 @@ package org.telegram.plugin
 import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.AndroidComponentsExtension
 import com.android.build.api.variant.ApplicationVariant
+import com.android.build.api.variant.ResValue
 import com.android.build.gradle.internal.res.LinkApplicationAndroidResourcesTask
 import org.gradle.api.Plugin
 import org.gradle.api.Project
@@ -10,6 +11,7 @@ import org.gradle.kotlin.dsl.register
 import org.telegram.tasks.GenerateStringResourceIdsAssetTask
 import org.telegram.tasks.GenerateLottieMetadataAssetFileTask
 import org.telegram.tasks.TelegramStringsTask
+import java.util.Locale
 
 class TelegramBuildAppPlugin : Plugin<Project> {
     override fun apply(project: Project) {
@@ -19,7 +21,26 @@ class TelegramBuildAppPlugin : Plugin<Project> {
                 ?: error("Apply com.android.application/library before org.telegram.build-app-plugin")
 
         androidComponents.onVariants { variant ->
+            val application = variant as ApplicationVariant
             val suffix = variant.name.replaceFirstChar { it.uppercase() }
+            val applicationId = application.applicationId
+            application.resValues.put(
+                application.makeResValueKey("string", "parsigram_application_id"),
+                applicationId.map { id -> ResValue(id) }
+            )
+            val contactMimeTypes = mapOf(
+                "parsigram_contact_profile_mime" to "profile",
+                "parsigram_contact_call_mime" to "call",
+                "parsigram_contact_video_call_mime" to "call.video"
+            )
+            contactMimeTypes.forEach { (resourceName, contactAction) ->
+                application.resValues.put(
+                    application.makeResValueKey("string", resourceName),
+                    applicationId.map { id ->
+                        ResValue("vnd.android.cursor.item/vnd.${id.lowercase(Locale.ROOT)}.android.$contactAction")
+                    }
+                )
+            }
 
             val task = project.tasks.register<TelegramStringsTask>(
                 "generate${suffix}TelegramStrings"
@@ -60,7 +81,7 @@ class TelegramBuildAppPlugin : Plugin<Project> {
                     )
                 )
 
-                resourcePackageName.set((variant as ApplicationVariant).applicationId)
+                resourcePackageName.set(applicationId)
             }
 
             variant.sources.res?.addGeneratedSourceDirectory(
@@ -73,7 +94,7 @@ class TelegramBuildAppPlugin : Plugin<Project> {
                 TelegramStringsTask::assetsOutputDir
             )
 
-            (variant as ApplicationVariant).androidResources.aaptAdditionalParameters.addAll(
+            application.androidResources.aaptAdditionalParameters.addAll(
                 task.flatMap { telegramStringsTask ->
                     telegramStringsTask.stableIdsFile.map { stableIdsFile ->
                         listOf(

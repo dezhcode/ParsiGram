@@ -1970,7 +1970,8 @@ public class AndroidUtilities {
         if (pathString.endsWith(".attheme")) {
             return false;
         }
-        return pathString != null && pathString.toLowerCase().contains("/data/data/" + ApplicationLoader.applicationContext.getPackageName());
+        String packageName = ApplicationLoader.applicationContext.getPackageName().toLowerCase(Locale.ROOT);
+        return pathString != null && pathString.toLowerCase(Locale.ROOT).contains("/data/data/" + packageName);
     }
 
     @SuppressLint("WrongConstant")

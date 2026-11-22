@@ -43,7 +43,7 @@ android {
 
     androidResources {
         noCompress += "pack"
-        localeFilters += ["zz"]
+        localeFilters += ["zz", "fa"]
     }
 
     signingConfigs {
@@ -85,7 +85,6 @@ android {
             debuggable false
             jniDebuggable false
             signingConfig signingConfigs.release
-            applicationIdSuffix ".web"
             minifyEnabled true
             shrinkResources true
             multiDexEnabled true
