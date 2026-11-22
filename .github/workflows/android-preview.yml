@@ -20,6 +20,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: v13.2.2-parsigram.2
+      APK_NAME: Parsigram-13.2.2-preview2-arm64-v8a.apk
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,13 +30,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Check release and install Android tools
+      - name: Install Android tools
         run: |
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo 'Release already exists. No asset was replaced.'
-            echo 'RELEASE_EXISTS=true' >> "$GITHUB_ENV"
-            exit 0
-          fi
           sdk="$RUNNER_TEMP/parsigram-android-sdk"
           archive="$RUNNER_TEMP/parsigram-commandline-tools.zip"
           mkdir -p "$sdk/cmdline-tools"
@@ -50,7 +46,6 @@ jobs:
           "$sdkmanager" --sdk_root="$sdk" 'platform-tools' 'platforms;android-36' \
             'build-tools;35.0.0' 'build-tools;36.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
       - name: Build the arm64 standalone APK
-        if: env.RELEASE_EXISTS != 'true'
         run: |
           cat > "$RUNNER_TEMP/arm64.init.gradle" <<'GRADLE'
           gradle.beforeProject { project ->
@@ -74,7 +69,6 @@ jobs:
             -Pandroid.injected.testOnly=false \
             :TMessagesProj_AppStandalone:assembleAfatStandalone
       - name: Sign and verify the preview APK
-        if: env.RELEASE_EXISTS != 'true'
         run: |
           umask 077
           openssl rand -hex 32 > "$RUNNER_TEMP/parsigram-preview.pass"
@@ -82,12 +76,13 @@ jobs:
             -storepass:file "$RUNNER_TEMP/parsigram-preview.pass" -alias parsigram-preview \
             -keyalg RSA -keysize 4096 -validity 10000 -dname 'CN=Parsigram Preview'
           build_tools="$ANDROID_HOME/build-tools/36.0.0"
-          apk=Parsigram-13.2.2-preview2-arm64-v8a.apk
+          apk="$APK_NAME"
           input=$(find TMessagesProj_AppStandalone/build/intermediates/apk/afat/standalone -name '*.apk' -type f)
           test -f "$input"
           "$build_tools/apksigner" sign --ks "$RUNNER_TEMP/parsigram-preview.p12" \
             --ks-pass "file:$RUNNER_TEMP/parsigram-preview.pass" --ks-key-alias parsigram-preview --out "$apk" "$input"
           "$build_tools/apksigner" verify "$apk"
+          "$build_tools/apksigner" verify --min-sdk-version 31 --max-sdk-version 31 "$apk"
           "$build_tools/zipalign" -c -P 16 4 "$apk"
           "$build_tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/parsigram-badging.txt"
           grep -F "package: name='Parsigram.dezhcode.app'" "$RUNNER_TEMP/parsigram-badging.txt"
@@ -98,14 +93,36 @@ jobs:
             exit 1
           fi
           unzip -tq "$apk"
+      - name: Save the verified APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: parsigram-preview2-arm64-v8a
+          path: ${{ env.APK_NAME }}
+          if-no-files-found: error
+          compression-level: 0
       - name: Publish the verified APK
-        if: env.RELEASE_EXISTS != 'true'
         run: |
-          apk=Parsigram-13.2.2-preview2-arm64-v8a.apk
+          apk="$APK_NAME"
           digest=$(sha256sum "$apk" | cut -d ' ' -f 1)
           printf '%s\n\n%s\n\n%s\n' \
             'نسخهٔ آزمایشی دوم پارسی‌گرام 13.2.2 برای دستگاه‌های اندرویدی arm64-v8a. مشکل نصب از طریق فایل APK در نسخهٔ قبلی برطرف شده است.' \
             'شناسهٔ بسته `Parsigram.dezhcode.app` است. ورود به حساب تلگرام روی دستگاه تست نشده است.' \
             "SHA-256: \`$digest\`" > "$RUNNER_TEMP/parsigram-release-notes.md"
-          gh release create "$RELEASE_TAG" "$apk" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title 'Parsigram 13.2.2 · نسخهٔ آزمایشی دوم' --prerelease --notes-file "$RUNNER_TEMP/parsigram-release-notes.md"
+          for attempt in 1 2 3 4; do
+            if timeout 30s gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets |
+              jq -e --arg apk "$apk" '.isDraft == false and any(.assets[]; .name == $apk and .state == "uploaded")' >/dev/null; then
+              echo 'The release already has the APK.'
+              exit 0
+            fi
+
+            if timeout 90s gh release create "$RELEASE_TAG" "$apk" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title 'Parsigram 13.2.2 · نسخهٔ آزمایشی دوم' --prerelease --notes-file "$RUNNER_TEMP/parsigram-release-notes.md"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 4 ]; then
+              sleep "$((attempt * 10))"
+            fi
+          done
+
+          echo '::error::GitHub Release publication failed. Download the verified APK from the workflow artifacts.'
+          exit 1
