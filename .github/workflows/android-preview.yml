@@ -19,8 +19,8 @@ jobs:
     timeout-minutes: 50
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: v13.2.2-parsigram.2
-      APK_NAME: Parsigram-13.2.2-preview2-arm64-v8a.apk
+      RELEASE_TAG: v13.2.2-parsigram.3
+      APK_NAME: Parsigram-13.2.2-preview3-arm64-v8a.apk
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,7 +96,7 @@ jobs:
       - name: Save the verified APK
         uses: actions/upload-artifact@v4
         with:
-          name: parsigram-preview2-arm64-v8a
+          name: parsigram-preview3-arm64-v8a
           path: ${{ env.APK_NAME }}
           if-no-files-found: error
           compression-level: 0
@@ -105,7 +105,7 @@ jobs:
           apk="$APK_NAME"
           digest=$(sha256sum "$apk" | cut -d ' ' -f 1)
           printf '%s\n\n%s\n\n%s\n' \
-            'نسخهٔ آزمایشی دوم پارسی‌گرام 13.2.2 برای دستگاه‌های اندرویدی arm64-v8a. مشکل نصب از طریق فایل APK در نسخهٔ قبلی برطرف شده است.' \
+            'نسخهٔ آزمایشی سوم پارسی‌گرام 13.2.2 برای دستگاه‌های اندرویدی arm64-v8a. صفحهٔ ورود برای تأیید شماره از پنجرهٔ استاندارد برنامه استفاده می‌کند.' \
             'شناسهٔ بسته `Parsigram.dezhcode.app` است. ورود به حساب تلگرام روی دستگاه تست نشده است.' \
             "SHA-256: \`$digest\`" > "$RUNNER_TEMP/parsigram-release-notes.md"
           for attempt in 1 2 3 4; do
@@ -116,7 +116,7 @@ jobs:
             fi
 
             if timeout 90s gh release create "$RELEASE_TAG" "$apk" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title 'Parsigram 13.2.2 · نسخهٔ آزمایشی دوم' --prerelease --notes-file "$RUNNER_TEMP/parsigram-release-notes.md"; then
+              --title 'Parsigram 13.2.2 · نسخهٔ آزمایشی سوم' --prerelease --notes-file "$RUNNER_TEMP/parsigram-release-notes.md"; then
               exit 0
             fi
             if [ "$attempt" -lt 4 ]; then

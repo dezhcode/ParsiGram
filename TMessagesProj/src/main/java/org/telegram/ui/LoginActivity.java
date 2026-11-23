@@ -37,13 +37,11 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.PointF;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
-import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.ConnectivityManager;
 import android.net.Uri;
@@ -201,7 +199,6 @@ import org.telegram.ui.Components.TextViewSwitcher;
 import org.telegram.ui.Components.TransformableLoginButtonView;
 import org.telegram.ui.Components.URLSpanNoUnderline;
 import org.telegram.ui.Components.VerticalPositionAutoAnimator;
-import org.telegram.ui.Components.chat.ViewPositionWatcher;
 import org.telegram.ui.Components.spoilers.SpoilersTextView;
 import org.telegram.ui.Stars.ExplainStarsSheet;
 import org.telegram.ui.Stories.recorder.ButtonWithCounterView;
@@ -357,14 +354,12 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     private AnimatorSet doneItemAnimation;
     private TransformableLoginButtonView floatingButtonIcon;
     private FragmentFloatingButton floatingButton;
-    private VerticalPositionAutoAnimator floatingAutoAnimator;
     private int progressRequestId;
     private boolean[] doneButtonVisible = new boolean[] {true, false};
 
     private AlertDialog cancelDeleteProgressDialog;
 
     private SizeNotifierFrameLayout sizeNotifierFrameLayout;
-    private Runnable keyboardHideCallback;
 
     private ImageView backButtonView;
     private RadialProgressView radialProgressView;
@@ -383,7 +378,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     private boolean isAnimatingIntro;
     private Runnable animationFinishCallback;
 
-    private PhoneNumberConfirmView phoneNumberConfirmView;
+    private AlertDialog phoneNumberConfirmDialog;
 
     private static final int DONE_TYPE_FLOATING = 0;
     private static final int DONE_TYPE_ACTION = 1;
@@ -629,10 +624,6 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             if (keyboardHeight > AndroidUtilities.dp(20) && isCustomKeyboardVisible()) {
                 AndroidUtilities.hideKeyboard(fragmentView);
             }
-            if (keyboardHeight <= AndroidUtilities.dp(20) && keyboardHideCallback != null) {
-                keyboardHideCallback.run();
-                keyboardHideCallback = null;
-            }
         });
         fragmentView = sizeNotifierFrameLayout;
 
@@ -750,14 +741,9 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
 
         floatingButton = new FragmentFloatingButton(context, resourceProvider);
         floatingButton.setButtonVisible(doneButtonVisible[DONE_TYPE_FLOATING], false);
-        floatingAutoAnimator = VerticalPositionAutoAnimator.attach(floatingButton);
+        VerticalPositionAutoAnimator.attach(floatingButton);
         sizeNotifierFrameLayout.addView(floatingButton, FragmentFloatingButton.createDefaultLayoutParamsBig());
         floatingButton.setOnClickListener(view -> onDoneButtonPressed());
-        floatingAutoAnimator.addUpdateListener((animation, value, velocity) -> {
-            if (phoneNumberConfirmView != null) {
-                phoneNumberConfirmView.updateFabPosition();
-            }
-        });
 
         backButtonView = new ImageView(context);
         backButtonView.setImageResource(R.drawable.ic_ab_back);
@@ -984,8 +970,9 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         setCustomKeyboardVisible(views[currentViewNum].hasCustomKeyboard(), false);
-        if (phoneNumberConfirmView != null) {
-            phoneNumberConfirmView.dismiss();
+        if (phoneNumberConfirmDialog != null) {
+            phoneNumberConfirmDialog.dismiss();
+            phoneNumberConfirmDialog = null;
         }
     }
 
@@ -2480,10 +2467,6 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             });
             phoneField.setOnEditorActionListener((textView, i, keyEvent) -> {
                 if (i == EditorInfo.IME_ACTION_NEXT) {
-                    if (phoneNumberConfirmView != null) {
-                        phoneNumberConfirmView.fabButton.callOnClick();
-                        return true;
-                    }
                     onNextPressed(null);
                     return true;
                 }
@@ -2903,116 +2886,40 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             }
             if (codeField.length() == 0 || phoneField.length() == 0) {
                 onFieldError(phoneOutlineView, false);
+                needShowAlert(getString(R.string.YourNumber),
+                        getString(codeField.length() == 0 ? R.string.ChooseCountry : R.string.InvalidPhoneNumber));
                 return;
             }
-            String phoneNumber = "+" + codeField.getText() + " " + phoneField.getText();
+
             if (!confirmedNumber) {
-                if (AndroidUtilities.displaySize.x > AndroidUtilities.displaySize.y && !isCustomKeyboardVisible() && sizeNotifierFrameLayout.measureKeyboardHeight() > AndroidUtilities.dp(20)) {
-                    keyboardHideCallback = () -> postDelayed(()-> onNextPressed(code), 200);
-                    AndroidUtilities.hideKeyboard(fragmentView);
+                if (phoneNumberConfirmDialog != null && phoneNumberConfirmDialog.isShowing()) {
                     return;
                 }
-
-                phoneNumberConfirmView = new PhoneNumberConfirmView(fragmentView.getContext(), (ViewGroup) fragmentView, floatingButton, phoneNumber, new PhoneNumberConfirmView.IConfirmDialogCallback() {
-                    @Override
-                    public void onFabPressed(PhoneNumberConfirmView confirmView, TransformableLoginButtonView fab) {
-                        onConfirm(confirmView);
-                    }
-
-                    @Override
-                    public void onEditPressed(PhoneNumberConfirmView confirmView, TextView editTextView) {
-                        confirmView.dismiss();
-                    }
-
-                    @Override
-                    public void onConfirmPressed(PhoneNumberConfirmView confirmView, TextView confirmTextView) {
-                        onConfirm(confirmView);
-                    }
-
-                    @Override
-                    public void onDismiss(PhoneNumberConfirmView confirmView) {
-                        phoneNumberConfirmView = null;
-                    }
-
-                    private void onConfirm(PhoneNumberConfirmView confirmView) {
-                        confirmedNumber = true;
-                        currentDoneType = DONE_TYPE_FLOATING;
-                        needShowProgress(0, false);
-
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && AndroidUtilities.isSimAvailable()) {
-                            boolean allowCall = getParentActivity().checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED;
-                            boolean allowCancelCall = getParentActivity().checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED;
-                            boolean allowReadCallLog = Build.VERSION.SDK_INT < Build.VERSION_CODES.P || getParentActivity().checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED;
-                            boolean allowReadPhoneNumbers = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || getParentActivity().checkSelfPermission(Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED;;
-                            if (codeField != null && "888".equals(codeField.getText())) {
-                                allowCall = true;
-                                allowCancelCall = true;
-                                allowReadCallLog = true;
-                                allowReadPhoneNumbers = true;
-                            }
-                            if (checkPermissions) {
-                                permissionsItems.clear();
-                                if (!allowCall) {
-                                    permissionsItems.add(Manifest.permission.READ_PHONE_STATE);
+                String phoneNumber = "+" + codeField.getText() + " " + phoneField.getText();
+                AlertDialog dialog = new AlertDialog.Builder(getParentActivity(), resourceProvider)
+                        .setTitle(getString(R.string.ConfirmCorrectNumber))
+                        .setMessage(phoneNumber)
+                        .setNegativeButton(getString(R.string.Edit), null)
+                        .setPositiveButton(getString(R.string.CheckPhoneNumberYes), (confirmation, which) -> {
+                            AndroidUtilities.runOnUIThread(() -> {
+                                if (currentViewNum == VIEW_PHONE_INPUT) {
+                                    confirmedNumber = true;
+                                    onNextPressed(code);
                                 }
-                                if (!allowCancelCall) {
-                                    permissionsItems.add(Manifest.permission.CALL_PHONE);
-                                }
-                                if (!allowReadCallLog) {
-                                    permissionsItems.add(Manifest.permission.READ_CALL_LOG);
-                                }
-                                if (!allowReadPhoneNumbers && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    permissionsItems.add(Manifest.permission.READ_PHONE_NUMBERS);
-                                }
-                                if (!permissionsItems.isEmpty()) {
-                                    SharedPreferences preferences = MessagesController.getGlobalMainSettings();
-                                    if (preferences.getBoolean("firstlogin", true) || getParentActivity().shouldShowRequestPermissionRationale(Manifest.permission.READ_PHONE_STATE) || getParentActivity().shouldShowRequestPermissionRationale(Manifest.permission.READ_CALL_LOG)) {
-                                        preferences.edit().putBoolean("firstlogin", false).commit();
-                                        AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
-
-                                        builder.setPositiveButton(getString("Continue", R.string.Continue), null);
-                                        int resId;
-                                        if (!allowCall && (!allowCancelCall || !allowReadCallLog)) {
-                                            builder.setMessage(getString("AllowReadCallAndLog", R.string.AllowReadCallAndLog));
-                                            resId = R.raw.calls_log;
-                                        } else if (!allowCancelCall || !allowReadCallLog) {
-                                            builder.setMessage(getString("AllowReadCallLog", R.string.AllowReadCallLog));
-                                            resId = R.raw.calls_log;
-                                        } else {
-                                            builder.setMessage(getString("AllowReadCall", R.string.AllowReadCall));
-                                            resId = R.raw.incoming_calls;
-                                        }
-                                        builder.setTopAnimation(resId, 46, false, Theme.getColor(Theme.key_dialogTopBackground)); builder.setTopBackgroundColorKey(Theme.key_dialogTopBackground, null);
-                                        permissionsDialog = showDialog(builder.create());
-                                        confirmedNumber = true;
-                                    } else {
-                                        try {
-                                            getParentActivity().requestPermissions(permissionsItems.toArray(new String[0]), 6);
-                                        } catch (Exception e) {
-                                            FileLog.e(e);
-                                        }
-                                    }
-                                    return;
-                                }
-                            }
-                        }
-
-                        confirmView.animateProgress(()->{
-                            confirmView.dismiss();
-                            AndroidUtilities.runOnUIThread(()-> {
-                                onNextPressed(code);
-                                floatingButton.progressView.sync(confirmView.fabButton.progressView);
-                            }, 150);
-                        });
+                            });
+                        })
+                        .create();
+                phoneNumberConfirmDialog = dialog;
+                if (showDialog(dialog, dismissed -> {
+                    if (phoneNumberConfirmDialog == dismissed) {
+                        phoneNumberConfirmDialog = null;
                     }
-                });
-                phoneNumberConfirmView.show();
+                }) == null) {
+                    phoneNumberConfirmDialog = null;
+                }
                 return;
-            } else confirmedNumber = false;
-
-            if (phoneNumberConfirmView != null) {
-                phoneNumberConfirmView.dismiss();
             }
+            confirmedNumber = false;
 
             boolean simcardAvailable = AndroidUtilities.isSimAvailable();
             boolean allowCall = true;
@@ -8775,9 +8682,6 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         }
 
         keyboardView.updateColors();
-        if (phoneNumberConfirmView != null) {
-            phoneNumberConfirmView.updateColors();
-        }
     }
 
     private int backButtonFilterColor, backButtonSelectorColor, proxyDrawableColor, proxyButtonSelectorColor;
@@ -8877,225 +8781,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         showDialog(builder.create());
     }
 
-    private final static class PhoneNumberConfirmView extends FrameLayout {
-        private IConfirmDialogCallback callback;
-        private ViewGroup fragmentView;
-        private View fabContainer;
-
-        private View blurredView;
-        private View dimmView;
-        private TransformableLoginButtonView fabTransform;
-        private FragmentFloatingButton fabButton;
-
-        private TextView confirmMessageView;
-        private TextView numberView;
-        private TextView editTextView;
-        private TextView confirmTextView;
-
-        private FrameLayout popupLayout;
-
-        private boolean dismissed;
-
-        private PhoneNumberConfirmView(@NonNull Context context, ViewGroup fragmentView, View fabContainer, String numberText, IConfirmDialogCallback callback) {
-            super(context);
-
-            this.fragmentView = fragmentView;
-            this.fabContainer = fabContainer;
-            this.callback = callback;
-
-            blurredView = new View(getContext());
-            blurredView.setOnClickListener(v -> dismiss());
-            addView(blurredView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
-
-            dimmView = new View(getContext());
-            dimmView.setBackgroundColor(0x40000000);
-            dimmView.setAlpha(0);
-            addView(dimmView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
-
-            fabTransform = new TransformableLoginButtonView(getContext());
-            fabTransform.setTransformType(TransformableLoginButtonView.TRANSFORM_ARROW_CHECK);
-            fabTransform.setDrawBackground(false);
-
-
-            fabButton = new FragmentFloatingButton(context, null);
-            fabButton.addView(fabTransform, LayoutHelper.createFrame(56, 56, Gravity.CENTER));
-            fabButton.addAdditionalView(fabTransform);
-            fabButton.setOnClickListener(v -> callback.onFabPressed(this, fabTransform));
-            fabButton.setContentDescription(getString(R.string.Done));
-            addView(fabButton, LayoutHelper.createFrame(56, 56, Gravity.TOP | Gravity.LEFT));
-
-            popupLayout = new FrameLayout(context);
-
-            addView(popupLayout, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 140, Gravity.TOP | Gravity.CENTER_HORIZONTAL, 24, 0, 24, 0));
-
-            confirmMessageView = new TextView(context);
-            confirmMessageView.setText(getString(R.string.ConfirmCorrectNumber));
-            confirmMessageView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
-            confirmMessageView.setSingleLine();
-            popupLayout.addView(confirmMessageView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT, 24, 20, 24, 0));
-
-            numberView = new TextView(context);
-            numberView.setText(numberText);
-            numberView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 18);
-            numberView.setTypeface(AndroidUtilities.bold());
-            numberView.setSingleLine();
-            popupLayout.addView(numberView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT, 24, 48, 24, 0));
-
-            int buttonPadding = AndroidUtilities.dp(16);
-            int buttonMargin = 8;
-
-            editTextView = new TextView(context);
-            editTextView.setText(getString(R.string.Edit));
-            editTextView.setSingleLine();
-            editTextView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
-            editTextView.setBackground(Theme.getRoundRectSelectorDrawable(AndroidUtilities.dp(6), Theme.getColor(Theme.key_changephoneinfo_image2)));
-            editTextView.setOnClickListener(v -> callback.onEditPressed(this, editTextView));
-            editTextView.setTypeface(Typeface.DEFAULT_BOLD);
-            editTextView.setPadding(buttonPadding, buttonPadding / 2, buttonPadding, buttonPadding / 2);
-            popupLayout.addView(editTextView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.BOTTOM | (LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT), buttonMargin, buttonMargin, buttonMargin, buttonMargin));
-
-            confirmTextView = new TextView(context);
-            confirmTextView.setText(getString(R.string.CheckPhoneNumberYes));
-            confirmTextView.setSingleLine();
-            confirmTextView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
-            confirmTextView.setBackground(Theme.getRoundRectSelectorDrawable(AndroidUtilities.dp(6), Theme.getColor(Theme.key_changephoneinfo_image2)));
-            confirmTextView.setOnClickListener(v -> callback.onConfirmPressed(this, confirmTextView));
-            confirmTextView.setTypeface(Typeface.DEFAULT_BOLD);
-            confirmTextView.setPadding(buttonPadding, buttonPadding / 2, buttonPadding, buttonPadding / 2);
-            popupLayout.addView(confirmTextView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.BOTTOM | (LocaleController.isRTL ? Gravity.LEFT : Gravity.RIGHT), buttonMargin, buttonMargin, buttonMargin, buttonMargin));
-
-            updateFabPosition();
-            updateColors();
-        }
-
-        private final PointF pointF = new PointF();
-        private void updateFabPosition() {
-            ViewPositionWatcher.computeCoordinatesInParent(fabContainer, fragmentView, pointF);
-            fabButton.setTranslationX(pointF.x);
-            fabButton.setTranslationY(pointF.y);
-            requestLayout();
-        }
-
-        private int popupLayoutColor;
-
-        private void updateColors() {
-            fabTransform.setColor(Theme.getColor(Theme.key_chats_actionIcon));
-            fabTransform.setBackgroundColor(Theme.getColor(Theme.key_chats_actionBackground));
-            final int popupColor = Theme.getColor(Theme.key_dialogBackground);
-            if (popupLayout.getBackground() == null) {
-                popupLayout.setBackground(Theme.createRoundRectDrawable(AndroidUtilities.dp(12), popupColor));
-            } else if (popupColor != popupLayoutColor) {
-                Theme.setDrawableColor(popupLayout.getBackground(), popupColor);
-                popupLayout.invalidate();
-            }
-            popupLayoutColor = popupColor;
-            confirmMessageView.setTextColor(Theme.getColor(Theme.key_dialogTextGray2));
-            numberView.setTextColor(Theme.getColor(Theme.key_dialogTextBlack));
-            editTextView.setTextColor(Theme.getColor(Theme.key_changephoneinfo_image2));
-            confirmTextView.setTextColor(Theme.getColor(Theme.key_changephoneinfo_image2));
-            fabButton.updateColors();
-        }
-
-        @Override
-        protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
-            super.onLayout(changed, left, top, right, bottom);
-
-            int height = popupLayout.getMeasuredHeight();
-            int popupBottom = (int) (fabButton.getTranslationY() - AndroidUtilities.dp(32));
-            popupLayout.layout(popupLayout.getLeft(), popupBottom - height, popupLayout.getRight(), popupBottom);
-        }
-
-        private void show() {
-            ValueAnimator anim = ValueAnimator.ofFloat(0, 1).setDuration(250);
-            anim.addListener(new AnimatorListenerAdapter() {
-                @Override
-                public void onAnimationStart(Animator animation) {
-                    fabContainer.setVisibility(GONE);
-
-                    // TODO: Generify this code, currently it's a clone
-                    float scaleFactor = 10;
-                    int w = (int) (fragmentView.getMeasuredWidth() / scaleFactor);
-                    int h = (int) (fragmentView.getMeasuredHeight() / scaleFactor);
-                    Bitmap bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-                    Canvas canvas = new Canvas(bitmap);
-                    canvas.scale(1.0f / scaleFactor, 1.0f / scaleFactor);
-                    canvas.drawColor(Theme.getColor(Theme.key_windowBackgroundWhite));
-                    fragmentView.draw(canvas);
-                    Utilities.stackBlurBitmap(bitmap, Math.max(8, Math.max(w, h) / 150));
-                    blurredView.setBackground(new BitmapDrawable(getContext().getResources(), bitmap));
-                    blurredView.setAlpha(0.0f);
-                    blurredView.setVisibility(View.VISIBLE);
-
-                    fragmentView.addView(PhoneNumberConfirmView.this);
-                }
-
-                @Override
-                public void onAnimationEnd(Animator animation) {
-                    if (AndroidUtilities.isAccessibilityTouchExplorationEnabled()) {
-                        fabButton.requestFocus();
-                    }
-                }
-            });
-            anim.addUpdateListener(animation -> {
-                float val = (float) animation.getAnimatedValue();
-                fabTransform.setProgress(val);
-                blurredView.setAlpha(val);
-                dimmView.setAlpha(val);
-
-                popupLayout.setAlpha(val);
-                float scale = 0.5f + val * 0.5f;
-                popupLayout.setScaleX(scale);
-                popupLayout.setScaleY(scale);
-            });
-            anim.setInterpolator(CubicBezierInterpolator.DEFAULT);
-            anim.start();
-        }
-
-        private void animateProgress(Runnable callback) {
-            fabButton.setProgressVisible(true, true);
-            AndroidUtilities.runOnUIThread(callback, 400);
-        }
-
-        private void dismiss() {
-            if (dismissed) return;
-            dismissed = true;
-
-            callback.onDismiss(this);
-
-            ValueAnimator anim = ValueAnimator.ofFloat(1, 0).setDuration(250);
-            anim.addListener(new AnimatorListenerAdapter() {
-                @Override
-                public void onAnimationEnd(Animator animation) {
-                    if (getParent() instanceof ViewGroup) {
-                        ((ViewGroup) getParent()).removeView(PhoneNumberConfirmView.this);
-                    }
-                    fabContainer.setVisibility(VISIBLE);
-                }
-            });
-            anim.addUpdateListener(animation -> {
-                float val = (float) animation.getAnimatedValue();
-                blurredView.setAlpha(val);
-                dimmView.setAlpha(val);
-                fabTransform.setProgress(val);
-                popupLayout.setAlpha(val);
-
-                float scale = 0.5f + val * 0.5f;
-                popupLayout.setScaleX(scale);
-                popupLayout.setScaleY(scale);
-            });
-            anim.setInterpolator(CubicBezierInterpolator.DEFAULT);
-            anim.start();
-        }
-
-        private interface IConfirmDialogCallback {
-            void onFabPressed(PhoneNumberConfirmView confirmView, TransformableLoginButtonView fab);
-            void onEditPressed(PhoneNumberConfirmView confirmView, TextView editTextView);
-            void onConfirmPressed(PhoneNumberConfirmView confirmView, TextView confirmTextView);
-            void onDismiss(PhoneNumberConfirmView confirmView);
-        }
-    }
-
-    private final static class PhoneInputData {
+   private final static class PhoneInputData {
         private CountrySelectActivity.Country country;
         private List<String> patterns;
         private String phoneNumber;
